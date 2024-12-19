@@ -162,11 +162,15 @@ const OutputContext = struct {
 
         if (self.progress_timer) |*timer| {
             const tick = timer.read() / progress_tick;
-            self.progressLineClear();
-            std.debug.print("[{u}] {d:.2}%", .{
+            const stdErr = std.io.getStdErr();
+            var buffered_writer: std.io.BufferedWriter(64, std.fs.File.Writer) = .{ .unbuffered_writer = stdErr.writer() };
+
+            _ = buffered_writer.write("\r\x1b[K") catch unreachable;
+            buffered_writer.writer().print("[{u}] {d:.2}%", .{
                 progress_spinner[tick % progress_spinner.len],
                 @as(f64, @floatFromInt(100_00 * completed / total)) * 0.01,
-            });
+            }) catch unreachable;
+            buffered_writer.flush() catch {};
         }
     }
 
@@ -190,6 +194,12 @@ pub const OutputOptions = struct {
     };
 };
 
+test {
+    _ = @import("cpu/SearchBlock.zig");
+    _ = @import("cpu/slime_check/scalar.zig");
+    _ = @import("cpu/slime_check/simd.zig");
+}
+
 test "output context" {
     var ctx = OutputContext.init(std.testing.allocator, .{
         .format = .csv,
@@ -197,15 +207,20 @@ test "output context" {
         .progress = false,
     });
 
-    const pipe = try std.os.pipe();
-    var readf = std.fs.File{ .handle = pipe[0] };
-    defer readf.close();
-    var writef = std.fs.File{ .handle = pipe[1] };
-    defer writef.close();
+    if (@import("builtin").os.tag != .windows) {
+        const pipe = try std.posix.pipe();
+        var readf = std.fs.File{ .handle = pipe[0] };
+        defer readf.close();
+        var writef = std.fs.File{ .handle = pipe[1] };
+        defer writef.close();
 
-    ctx.f = writef;
-    ctx.progress(1, 10);
-    ctx.flush();
+        ctx.f = std.io.getStdOut();
+        ctx.progress(1, 10);
+        ctx.flush();
+    } else {
+        ctx.progress(1, 10);
+        ctx.flush();
+    }
 }
 
 fn usage(out: std.fs.File) void {
@@ -352,7 +367,7 @@ fn parseArgs(arena: std.mem.Allocator) ArgsError!Options {
         s[0] =
             .{
             .world_seed = seed,
-            .threshold = try std.fmt.parseInt(i32, threshold, 10),
+            .threshold = try std.fmt.parseInt(u8, threshold, 10),
 
             .x0 = -range_n,
             .z0 = -range_n,
@@ -383,7 +398,7 @@ fn readJsonParams(arena: std.mem.Allocator, path: []const u8) ![]const JsonParam
     return std.json.parseFromSliceLeaky([]const JsonParams, arena, data, .{});
 }
 const JsonParams = struct {
-    threshold: i32,
+    threshold: u8,
 
     x0: i32,
     z0: i32,
